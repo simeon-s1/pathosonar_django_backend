@@ -43,6 +43,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "django_filters",
     "rest_api",
+    "django_apscheduler",
 ]
 REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.LimitOffsetPagination",
@@ -88,7 +89,7 @@ DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
         "OPTIONS": {"options": "-c search_path=public"},
-        "NAME": "covsonar_pg",
+        "NAME": "covsonar",
         "USER": "postgres",
         "HOST": "localhost",
         "PORT": "5432",

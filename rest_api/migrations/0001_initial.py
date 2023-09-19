@@ -321,7 +321,7 @@ class Migration(migrations.Migration):
                 (
                     "value_float",
                     models.DecimalField(
-                        blank=True, decimal_places=65535, max_digits=65535, null=True
+                        blank=True, decimal_places=10, max_digits=10, null=True
                     ),
                 ),
                 ("value_text", models.TextField(blank=True, null=True)),
@@ -425,7 +425,7 @@ class Migration(migrations.Migration):
                 (
                     "value_float",
                     models.DecimalField(
-                        blank=True, decimal_places=65535, max_digits=65535, null=True
+                        blank=True, decimal_places=10, max_digits=10, null=True
                     ),
                 ),
                 ("value_text", models.TextField(blank=True, null=True)),

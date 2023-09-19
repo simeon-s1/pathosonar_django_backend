@@ -5,7 +5,7 @@ from django.contrib import admin
 from . import settings
 
 router = routers.DefaultRouter()
-router.register(r"variants", viewsets.VariantViewSet)
+router.register(r"mutations", viewsets.MutationViewSet)
 router.register(r"genes", viewsets.GenesViewSet)
 router.register(r"snp1", viewsets.SNP1ViewSet)
 router.register(r"mutation_signature", viewsets.MutationSignatureViewSet)

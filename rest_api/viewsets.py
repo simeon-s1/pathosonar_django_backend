@@ -9,10 +9,7 @@ from rest_framework.response import Response
 from rest_framework.request import Request
 from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from rest_api.models.sample import Sample
-    from rest_api.models.variant import Variant
-
+from .serializers import MutationSerializer, SampleSerializer, SamplePropertySerializer
 from . import models
 
 
@@ -31,12 +28,6 @@ class ElementSerializer(serializers.HyperlinkedModelSerializer):
             "standard",
             "parent",
         ]
-
-
-class VariantSerializer(serializers.HyperlinkedModelSerializer):
-    class Meta:
-        model = models.Variant
-        fields = ["id", "label", "ref"]
 
 
 class ElementReferencesSerializer(serializers.HyperlinkedModelSerializer):
@@ -66,13 +57,13 @@ class ElementViewSet(viewsets.ModelViewSet):
         return Response({"genes": [item["symbol"] for item in queryset]})
 
 
-class VariantViewSet(
+class MutationViewSet(
     viewsets.GenericViewSet,
     generics.mixins.ListModelMixin,
     generics.mixins.RetrieveModelMixin,
 ):
-    queryset = models.Variant.objects.all()
-    serializer_class = VariantSerializer
+    queryset = models.Mutation.objects.all()
+    serializer_class = MutationSerializer
 
 
 class PropertySerializer(serializers.ModelSerializer):
@@ -80,34 +71,6 @@ class PropertySerializer(serializers.ModelSerializer):
         model = models.Property
         fields = "__all__"
         filter_backends = [DjangoFilterBackend]
-
-
-class SamplePropertySerializer(serializers.ModelSerializer):
-    value = serializers.SerializerMethodField()
-    name = serializers.ReadOnlyField(source="property.name")
-
-    class Meta:
-        model = models.Sample2Property
-        fields = ["value", "name"]
-
-    def get_value(self, obj: models.Sample2Property):
-        return (
-            obj.value_integer
-            or obj.value_float
-            or obj.value_text
-            or obj.value_varchar
-            or obj.value_blob
-            or obj.value_date
-            or obj.value_zip
-        )
-
-
-class SampleSerializer(serializers.ModelSerializer):
-    properties = SamplePropertySerializer(many=True, read_only=True)
-
-    class Meta:
-        model = models.Sample
-        fields = "__all__"
 
 
 class SampleViewSet(
@@ -123,7 +86,7 @@ class SampleViewSet(
     def count_unique_nt_mut_ref_view_set(self, request: Request, *args, **kwargs):
         # TODO-smc abklären ob das so richtig ist
         queryset = (
-            models.Variant.objects.exclude(
+            models.Mutation.objects.exclude(
                 element__type="cds",
                 alt="N",
             )
@@ -168,11 +131,11 @@ class SampleViewSet(
             for snp_profile_filter in snp_profile_filters:
                 queryset = self.filter_snp_profile_nt(**snp_profile_filter, qs=queryset)
         queryset = queryset.prefetch_related("properties__property")
-        # obj.sequence.alignments.filter(variants__frameshift=1).values_list("variants__label", flat=True)
+        # obj.sequence.alignments.filter(mutations__frameshift=1).values_list("mutations__label", flat=True)
         queryset = queryset.prefetch_related(
             Prefetch(
-                "sequence__alignments__variants",
-                queryset=models.Variant.objects.filter(frameshift="1"),
+                "sequence__alignments__mutations",
+                queryset=models.Mutation.objects.filter(frameshift="1"),
                 to_attr="frameshifts",
             )
         )
@@ -195,7 +158,7 @@ class SampleViewSet(
                     query[f"properties__{datatype}__{key}"] = value
                 queryset = queryset.filter(**query)
         queryset.prefetch_related(
-            "sequence__alignments__variants__element__molecule__reference"
+            "sequence__alignments__mutations__element__molecule__reference"
         )
         queryset.prefetch_related("properties__property")
         # save queryset as file:
@@ -220,7 +183,7 @@ class SampleViewSet(
     ) -> QuerySet:
         # For NT: ref_nuc followed by ref_pos followed by alt_nuc (e.g. T28175C).
         if qs is None:
-            qs = Variant.objects.all()
+            qs = models.Mutation.objects.all()
         filters = {
             "start": ref_pos,
             "ref": ref_nuc,
@@ -240,7 +203,7 @@ class SampleViewSet(
     ) -> QuerySet:
         # For AA: protein_symbol:ref_aa followed by ref_pos followed by alt_aa (e.g. OPG098:E162K)
         if qs is None:
-            qs = Variant.objects.filter(element__molecule__symbol=protein_symbol)
+            qs = models.Mutation.objects.filter(element__molecule__symbol=protein_symbol)
         filters = {
             "start": ref_pos,
             "ref": ref_aa,
@@ -257,7 +220,7 @@ class SampleViewSet(
     ) -> QuerySet:
         # For NT: del:first_NT_deleted-last_NT_deleted (e.g. del:133177-133186).
         if qs is None:
-            qs = Variant.objects.all()
+            qs = models.Mutation.objects.all()
 
     def filter_del_profile_aa(
         self,
@@ -269,7 +232,7 @@ class SampleViewSet(
     ) -> QuerySet:
         # For AA: protein_symbol:del:first_AA_deleted-last_AA_deleted (e.g. OPG197:del:34-35)
         if qs is None:
-            qs = Variant.objects.filter(element__molecule__symbol=protein_symbol)
+            qs = models.Mutation.objects.filter(element__molecule__symbol=protein_symbol)
         filters = {"start": first_deleted_aa - 1, "end": last_deleted_aa, "alt": ""}
         qs = qs.exclude(**filters) if exclude else qs.filter(**filters)
         return qs
@@ -284,7 +247,7 @@ class SampleViewSet(
     ) -> QuerySet:
         # For NT: ref_nuc followed by ref_pos followed by alt_nucs (e.g. T133102TTT)
         if qs is None:
-            qs = Variant.objects.all()
+            qs = models.Mutation.objects.all()
         filters = {
             "start": ref_pos,
             "ref": ref_nuc,
@@ -304,7 +267,7 @@ class SampleViewSet(
     ) -> QuerySet:
         # For AA: protein_symbol:ref_aa followed by ref_pos followed by alt_aas (e.g. OPG197:A34AK)
         if qs is None:
-            qs = Variant.objects.filter(element__molecule__symbol=protein_symbol)
+            qs = models.Mutation.objects.filter(element__molecule__symbol=protein_symbol)
         filters = {
             "start": ref_pos,
             "ref": ref_aa,
@@ -365,7 +328,7 @@ class SNP1Serializer(serializers.HyperlinkedModelSerializer):
     )
 
     class Meta:
-        model = models.Variant
+        model = models.Mutation
         fields = [
             "reference_accession",
             "ref",
@@ -380,7 +343,7 @@ class SNP1ViewSet(
     generics.mixins.ListModelMixin,
     generics.mixins.RetrieveModelMixin,
 ):
-    queryset = models.Variant.objects.filter(
+    queryset = models.Mutation.objects.filter(
         ref__in=["C", "T", "G", "A"], alt__in=["C", "T", "G", "A"]
     ).exclude(ref=F("alt"))
     serializer_class = SNP1Serializer
@@ -393,7 +356,7 @@ class MutationSignatureSerializer(serializers.HyperlinkedModelSerializer):
     count = serializers.IntegerField()
 
     class Meta:
-        model = models.Variant
+        model = models.Mutation
         fields = [
             "reference_accession",
             "ref",
@@ -410,7 +373,7 @@ class MutationSignatureRawSerializer(serializers.HyperlinkedModelSerializer):
     )
 
     class Meta:
-        model = models.Variant
+        model = models.Mutation
         fields = [
             "reference_accession",
             "ref",
@@ -426,7 +389,7 @@ class MutationSignatureViewSet(
     generics.mixins.RetrieveModelMixin,
 ):
     queryset = (
-        models.Variant.objects.filter(ref__in=["C", "T"], alt__in=["C", "T", "G", "A"])
+        models.Mutation.objects.filter(ref__in=["C", "T"], alt__in=["C", "T", "G", "A"])
         .exclude(ref=F("alt"))
         .annotate(count=Count("alignments__sequence__samples"))
     )
@@ -436,7 +399,7 @@ class MutationSignatureViewSet(
 
     @action(detail=False, methods=["get"])
     def raw(self, request: Request, *args, **kwargs):
-        queryset = models.Variant.objects.filter(
+        queryset = models.Mutation.objects.filter(
             ref__in=["C", "T"], alt__in=["C", "T", "G", "A"]
         ).exclude(ref=F("alt"))
         page = self.paginate_queryset(queryset)
@@ -505,10 +468,10 @@ class PropertyViewSet(
 
 class MutationFrequencySerializer(serializers.HyperlinkedModelSerializer):
     class Meta:
-        model = models.Variant
+        model = models.Mutation
         fields = [
             "element_symbol",
-            "variant_label",
+            "mutation_label",
             "count",
         ]
 
@@ -542,29 +505,29 @@ class AAMutationViewSet(
                 sample2property__property__name="GENOME_COMPLETENESS",
                 sample2property__value_text="complete",
             )
-        variant_query = (
-            models.Variant.objects.filter(
+        mutation_query = (
+            models.Mutation.objects.filter(
                 element__molecule__reference__accession=reference_value
             )
             .filter(alignments__sequence__samples__in=samples_query)
             .filter(element__symbol__in=gene_list)
-            .annotate(variant_count=Count("alignments__sequence__samples"))
-            .filter(variant_count__gte=min_nb_freq)
-            .order_by("-variant_count")
+            .annotate(mutation_count=Count("alignments__sequence__samples"))
+            .filter(mutation_count__gte=min_nb_freq)
+            .order_by("-mutation_count")
         )
         response = [
             {
-                "symbol": variant.element.symbol,
-                "variant": variant.label,
-                "count": variant.variant_count,
+                "symbol": mutation.element.symbol,
+                "mutation": mutation.label,
+                "count": mutation.mutation_count,
             }
-            for variant in variant_query
+            for mutation in mutation_query
         ]
 
         return Response(data=response)
 
 
-class VariantLabelSerializer(serializers.Serializer):
+class MutationLabelSerializer(serializers.Serializer):
     labels = serializers.ListField()
 
 
@@ -592,19 +555,19 @@ class SampleGenomesSerializer(serializers.HyperlinkedModelSerializer):
 
     def get_genomic_profiles(self, obj: models.Sample):
         query = (
-            obj.sequence.alignments.exclude(variants__alt="N")
-            .filter(variants__element__type="gene")
-            .values_list("variants__label", flat=True)
+            obj.sequence.alignments.exclude(mutations__alt="N")
+            .filter(mutations__element__type="gene")
+            .values_list("mutations__label", flat=True)
         )
         return query
 
     def get_proteomic_profiles(self, obj: models.Sample):
         query = (
-            obj.sequence.alignments.exclude(variants__alt="X")
-            .filter(variants__element__type="cds")
-            .values_list("variants__label", flat=True)
+            obj.sequence.alignments.exclude(mutations__alt="X")
+            .filter(mutations__element__type="cds")
+            .values_list("mutations__label", flat=True)
         )
-        return VariantLabelSerializer({"labels": query}).data
+        return MutationLabelSerializer({"labels": query}).data
 
     def csv_line(self):
         line = []

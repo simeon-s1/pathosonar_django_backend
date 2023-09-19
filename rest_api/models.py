@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models import UniqueConstraint
 
 
 class Sequence(models.Model):
@@ -20,13 +21,13 @@ class Alignment(models.Model):
         db_table = "alignment"
 
 
-class Alignment2Variant(models.Model):
+class Alignment2Mutation(models.Model):
     alignment = models.ForeignKey(Alignment, models.DO_NOTHING)
-    variant = models.ForeignKey("Variant", models.DO_NOTHING)
+    mutation = models.ForeignKey("Mutation", models.DO_NOTHING, blank=True, null=True)
 
     class Meta:
-        db_table = "alignment2variant"
-        unique_together = (("variant", "alignment"),)
+        db_table = "alignment2mutation"
+        unique_together = (("mutation", "alignment"),)
 
 
 class AnnotationType(models.Model):
@@ -82,7 +83,6 @@ class Lineages(models.Model):
 class Molecule(models.Model):
     id = models.BigAutoField(primary_key=True)
     reference = models.ForeignKey("Reference", models.DO_NOTHING, blank=True, null=True)
-    type = models.CharField(blank=True, null=True)
     accession = models.CharField(unique=True, blank=True, null=True)
     symbol = models.CharField(blank=True, null=True)
     description = models.CharField(blank=True, null=True)
@@ -101,6 +101,7 @@ class Reference(models.Model):
     organism = models.CharField(blank=True, null=True)
     translation_group = models.ForeignKey("TranslationGroup", models.DO_NOTHING)
     standard = models.BigIntegerField(blank=True, null=True)
+    type = models.CharField(blank=True, null=True)
 
     class Meta:
         db_table = "reference"
@@ -136,7 +137,7 @@ class Sample2Property(models.Model):
     sample = models.ForeignKey(Sample, models.DO_NOTHING, related_name="properties")
     value_integer = models.BigIntegerField(blank=True, null=True)
     value_float = models.DecimalField(
-        max_digits=65535, decimal_places=65535, blank=True, null=True
+        max_digits=10, decimal_places=10, blank=True, null=True
     )
     value_text = models.TextField(blank=True, null=True)
     value_varchar = models.CharField(blank=True, null=True)
@@ -169,7 +170,7 @@ class TranslationGroup(models.Model):
         db_table = "translation_group"
 
 
-class Variant(models.Model):
+class Mutation(models.Model):
     id = models.BigAutoField(primary_key=True)
     element = models.ForeignKey(Element, models.DO_NOTHING, blank=True, null=True)
     ref = models.CharField(blank=True, null=True)
@@ -179,44 +180,45 @@ class Variant(models.Model):
     parent_id = models.BigIntegerField(blank=True, null=True)
     label = models.CharField(blank=True, null=True)
     frameshift = models.BigIntegerField(blank=True, null=True)
-    sample_name = models.CharField(max_length=50, blank=True, null=True)
-    nuc_profile = models.CharField(max_length=1024, blank=True, null=True)
-    aa_profile = models.CharField(max_length=1024, blank=True, null=True)
-    imported = models.CharField(max_length=50, blank=True, null=True)
-    collection_date = models.CharField(max_length=50, blank=True, null=True)
-    release_date = models.CharField(max_length=50, blank=True, null=True)
-    isolate = models.CharField(max_length=50, blank=True, null=True)
-    length = models.IntegerField(blank=True, null=True)
-    seq_tech = models.CharField(max_length=50, blank=True, null=True)
-    country = models.CharField(max_length=50, blank=True, null=True)
-    geo_location = models.CharField(max_length=50, blank=True, null=True)
-    host = models.CharField(max_length=50, blank=True, null=True)
-    genome_completeness = models.CharField(max_length=50, blank=True, null=True)
-    reference_accession = models.CharField(max_length=50, blank=True, null=True)
     alignments = models.ManyToManyField(
-        Alignment, through="Alignment2Variant", related_name="variants"
+        Alignment, through="Alignment2Mutation", related_name="mutations"
     )
 
     class Meta:
-        db_table = "variant"
+        db_table = "mutation"
+        UniqueConstraint(
+            name="unique_mutation",
+            fields=[
+                "element",
+                "ref",
+                "alt",
+                "start",
+                "end",
+                "parent_id",
+                "label",
+                "frameshift",
+            ]
+        )
 
 
-class Variant2Annotation(models.Model):
-    variant = models.ForeignKey(Variant, models.DO_NOTHING)
-    alignment = models.ForeignKey(Alignment, models.DO_NOTHING)
-    annotation = models.ForeignKey(AnnotationType, models.DO_NOTHING)
+class Mutation2Annotation(models.Model):
+    mutation = models.ForeignKey(Mutation, models.DO_NOTHING, blank=True, null=True)
+    alignment = models.ForeignKey(Alignment, models.DO_NOTHING, blank=True, null=True)
+    annotation = models.ForeignKey(
+        AnnotationType, models.DO_NOTHING, blank=True, null=True
+    )
 
     class Meta:
-        db_table = "variant2annotation"
-        unique_together = (("variant", "alignment", "annotation"),)
+        db_table = "mutation2annotation"
+        unique_together = (("mutation", "alignment", "annotation"),)
 
 
-class Variant2Property(models.Model):
+class Mutation2Property(models.Model):
     property = models.ForeignKey(Property, models.DO_NOTHING)
-    variant = models.ForeignKey(Variant, models.DO_NOTHING)
+    mutation = models.ForeignKey(Mutation, models.DO_NOTHING)
     value_integer = models.BigIntegerField(blank=True, null=True)
     value_float = models.DecimalField(
-        max_digits=65535, decimal_places=65535, blank=True, null=True
+        max_digits=10, decimal_places=10, blank=True, null=True
     )
     value_text = models.TextField(blank=True, null=True)
     value_varchar = models.CharField(blank=True, null=True)
@@ -225,8 +227,18 @@ class Variant2Property(models.Model):
     value_zip = models.CharField(blank=True, null=True)
 
     class Meta:
-        db_table = "variant2property"
+        db_table = "mutation2property"
         unique_together = (
-            ("property", "variant"),
-            ("property", "variant"),
+            ("property", "mutation"),
+            ("property", "mutation"),
         )
+
+
+class EnteredData(models.Model):
+    type = models.CharField(max_length=50, blank=True, null=True)
+    name = models.CharField(max_length=400, blank=True, null=True)
+    date = models.DateField(blank=True, null=True)
+
+    class Meta:
+        db_table = "entered_data"
+        unique_together = (("type", "name"),)

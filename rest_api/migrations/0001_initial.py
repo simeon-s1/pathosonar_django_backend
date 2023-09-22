@@ -71,7 +71,7 @@ class Migration(migrations.Migration):
                 ("end", models.BigIntegerField(blank=True, null=True)),
                 ("strand", models.BigIntegerField(blank=True, null=True)),
                 ("sequence", models.TextField(blank=True, null=True)),
-                ("standard", models.BigIntegerField(blank=True, null=True)),
+                ("standard", models.BooleanField(blank=True, null=True)),
                 ("parent_id", models.BigIntegerField(blank=True, null=True)),
             ],
             options={
@@ -217,7 +217,7 @@ class Migration(migrations.Migration):
                 ("accession", models.TextField(blank=True, null=True, unique=True)),
                 ("description", models.TextField(blank=True, null=True)),
                 ("organism", models.TextField(blank=True, null=True)),
-                ("standard", models.BigIntegerField(blank=True, null=True)),
+                ("standard", models.BooleanField(blank=True, null=True)),
                 (
                     "translation_group",
                     models.ForeignKey(
@@ -240,7 +240,7 @@ class Migration(migrations.Migration):
                 ("description", models.TextField(blank=True, null=True)),
                 ("length", models.BigIntegerField(blank=True, null=True)),
                 ("segment", models.BigIntegerField(blank=True, null=True)),
-                ("standard", models.BigIntegerField(blank=True, null=True)),
+                ("standard", models.SmallIntegerField(blank=True, null=True)),
                 (
                     "reference",
                     models.ForeignKey(

@@ -1,21 +1,3 @@
-import collections
-import csv
-
-import os
-import sys
-from typing import Any
-from typing import Dict
-from typing import Generator
-from typing import Iterator
-from typing import List
-from typing import Optional
-from typing import Set
-from typing import Union
-
-
-# Initialize logger
-LOGGER = LoggingConfigurator.get_logger()
-
 def harmonize_seq(seq: str) -> str:
     """
     Harmonizes the input sequence.
@@ -350,7 +332,6 @@ def _extract_cds_feature(feature) -> dict:
 
 
     parts = _process_segments(feature.location.parts, True)
-    accession = feature.qualifiers["protein_id"][0]
     symbol = feature.qualifiers["gene"][0] if "gene" in feature.qualifiers else feature.qualifiers["locus_tag"][0]
     sequence = feature.qualifiers.get("translation", [""])[0]
     description = feature.qualifiers.get("product", [""])[0]
@@ -391,6 +372,8 @@ def extract_source_feature(gbk_record: SeqRecord, molecule_dict: Dict, source_el
     Raises:
         ValueError: If SeqRecord does not contain exactly one 'source' feature.
     """
+    source_feature = list(filter(lambda x: x.type == "source", gbk_record.features))
+
     source_feature = [x for x in molecule_dict.features if x.type == "source"]
     if len(source_feature) != 1:
         raise ValueError("Expecting exactly one source feature.")
@@ -451,19 +434,19 @@ def import_gbk_file_into_reference_molecule_element_elempart():
         molecule_dict["accession"] = (
                 gbk_record.name + "." + str(gbk_record.annotations["sequence_version"])
             )
-        molecule_dict["symbol"] = gb_record.annotations.get("symbol", "")
+        molecule_dict["symbol"] = gb_record.annotations.get("symbol", "") #gb_record???
         molecule_dict["description"] = gbk_record.description
         molecule_dict["segment"] = str(i)
         molecule_dict["length"] = ""
         molecule_dict["standard"] = standard
 
-        source_element_dict["accession"] = molecule_dict["accession"] 
-        source_element_dict["symbol"] = molecule_dict["accession"] 
+            #source_element_dict["accession"] = molecule_dict["accession"] 
+            #source_element_dict["symbol"] = molecule_dict["accession"] 
         source_element_dict["strand"] = ""
         source_element_dict["description"] = ""
         source_element_dict["type"] = "source"
         source_element_dict["standard"]=1
-        source_element_dict["parent_id"]=None
+            #source_element_dict["parent_id"]=None
 
         # check if only one source feature, else error
         # get and unify full ref seq, add  length, type, segment to ref dict
@@ -482,19 +465,16 @@ def import_gbk_file_into_reference_molecule_element_elempart():
         
 
         for feat in gb_record.features:
-             if feat.type == "gene":
-            # pseudogene is unknown
-                if "pseudogene" in feat.qualifiers:
+            if "pseudogene" in feat.qualifiers:
                     continue
+            if feat.type == "gene":                
                 element_data["gene"].append(
                     # accs, symbol, start, end, strand, seq, desc, parts
-                    extract_gene_feature(
+                    _extract_gene_feature(
                         feat, source_element_dict["sequence"], source_id
                     )
                 )
             elif feat.type == "CDS":
-                # when pseudogene is unknown
-
                 if "pseudogene" in feat.qualifiers:
                     continue
                 element_data["cds"].append(

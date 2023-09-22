@@ -11,7 +11,7 @@ from django_apscheduler.models import DjangoJobExecution
 from django_apscheduler import util
 from apscheduler.triggers.base import BaseTrigger
 
-from rest_api.management.commands.data_entry import run_data_entry
+from rest_api.data_entry.data_entry import run_data_entry
 logger = logging.getLogger(__name__)
 
 

@@ -1,6 +1,13 @@
 from rest_framework import serializers
 from . import models
 
+def find_or_create(data, model, serializer_class):
+    try:
+        return model.objects.get(**data)
+    except model.DoesNotExist:
+        serializer = serializer_class(data=data)
+        serializer.is_valid(raise_exception=True)
+        return serializer.save()
 
 class MutationSerializer(serializers.HyperlinkedModelSerializer):
     class Meta:
@@ -48,7 +55,32 @@ class SampleSerializer(serializers.ModelSerializer):
         model = models.Sample
         fields = "__all__"
 
+
 class ReferenceSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.Reference
+        fields = "__all__"
+
+
+class MoleculeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.Molecule
+        fields = "__all__"
+
+
+class ElementSerializer(serializers.ModelSerializer):
+    def create(self, validated_data):
+        validated_data["sequence"] = (
+            validated_data["sequence"].strip().upper().replace("U", "T")
+        )
+        return super().create(validated_data)
+
+    class Meta:
+        model = models.Element
+        fields = "__all__"
+
+
+class ElempartSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.Elempart
         fields = "__all__"

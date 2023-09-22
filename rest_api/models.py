@@ -50,7 +50,7 @@ class Element(models.Model):
     end = models.BigIntegerField(blank=True, null=True)
     strand = models.BigIntegerField(blank=True, null=True)
     sequence = models.TextField(blank=True, null=True)
-    standard = models.BigIntegerField(blank=True, null=True)
+    standard = models.BooleanField(blank=True, null=True)
     parent_id = models.BigIntegerField(blank=True, null=True)
     molecule = models.ForeignKey("Molecule", models.DO_NOTHING, blank=True, null=True)
 
@@ -88,7 +88,8 @@ class Molecule(models.Model):
     description = models.CharField(blank=True, null=True)
     length = models.BigIntegerField(blank=True, null=True)
     segment = models.BigIntegerField(blank=True, null=True)
-    standard = models.BigIntegerField(blank=True, null=True)
+    standard = models.BooleanField(blank=True, null=True)
+    type = models.CharField(blank=True, null=True)
 
     class Meta:
         db_table = "molecule"
@@ -100,8 +101,7 @@ class Reference(models.Model):
     description = models.CharField(blank=True, null=True)
     organism = models.CharField(blank=True, null=True)
     translation_group = models.ForeignKey("TranslationGroup", models.DO_NOTHING)
-    standard = models.BigIntegerField(blank=True, null=True)
-    type = models.CharField(blank=True, null=True)
+    standard = models.BooleanField(blank=True, null=True)
 
     class Meta:
         db_table = "reference"

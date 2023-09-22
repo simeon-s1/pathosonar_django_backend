@@ -8,7 +8,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.request import Request
 from typing import TYPE_CHECKING
-
+from rest_api.data_entry.gbk_import import import_gbk_file
 from .serializers import MutationSerializer, SampleSerializer, SamplePropertySerializer
 from . import models
 
@@ -203,7 +203,9 @@ class SampleViewSet(
     ) -> QuerySet:
         # For AA: protein_symbol:ref_aa followed by ref_pos followed by alt_aa (e.g. OPG098:E162K)
         if qs is None:
-            qs = models.Mutation.objects.filter(element__molecule__symbol=protein_symbol)
+            qs = models.Mutation.objects.filter(
+                element__molecule__symbol=protein_symbol
+            )
         filters = {
             "start": ref_pos,
             "ref": ref_aa,
@@ -232,7 +234,9 @@ class SampleViewSet(
     ) -> QuerySet:
         # For AA: protein_symbol:del:first_AA_deleted-last_AA_deleted (e.g. OPG197:del:34-35)
         if qs is None:
-            qs = models.Mutation.objects.filter(element__molecule__symbol=protein_symbol)
+            qs = models.Mutation.objects.filter(
+                element__molecule__symbol=protein_symbol
+            )
         filters = {"start": first_deleted_aa - 1, "end": last_deleted_aa, "alt": ""}
         qs = qs.exclude(**filters) if exclude else qs.filter(**filters)
         return qs
@@ -267,7 +271,9 @@ class SampleViewSet(
     ) -> QuerySet:
         # For AA: protein_symbol:ref_aa followed by ref_pos followed by alt_aas (e.g. OPG197:A34AK)
         if qs is None:
-            qs = models.Mutation.objects.filter(element__molecule__symbol=protein_symbol)
+            qs = models.Mutation.objects.filter(
+                element__molecule__symbol=protein_symbol
+            )
         filters = {
             "start": ref_pos,
             "ref": ref_aa,
@@ -292,6 +298,15 @@ class ReferenceViewSet(
 ):
     queryset = models.Reference.objects.all()
     serializer_class = ReferenceSerializer
+
+    @action(detail=False, methods=["put"])
+    def import_gbk(self, request: Request, *args, **kwargs):
+        if not request.FILES or "gbk_file" not in request.FILES:
+            return Response("No file uploaded.")
+        gbk_file = request.FILES.get("gbk_file")
+        standard = bool(request.data["standard"])
+        import_gbk_file(gbk_file, standard)
+        return Response("OK")
 
 
 class GenesSerializer(serializers.HyperlinkedModelSerializer):

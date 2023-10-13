@@ -1,57 +1,49 @@
-from dataclasses import dataclass
+import csv
 import json
+import pathlib
 import time
-from django.db.models import F, Count, QuerySet, Prefetch
-from rest_framework import serializers, viewsets, generics
-from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from rest_framework.request import Request
+from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
+import traceback
 from typing import TYPE_CHECKING
+from django.http import HttpResponse
+import pandas as pd
+from django.core.exceptions import FieldDoesNotExist
+from django.core.files.uploadedfile import InMemoryUploadedFile
+from django.db.models import Count, F, Prefetch, QuerySet
+from django.db import transaction
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework import generics, serializers, viewsets
+from rest_framework.decorators import action
+from rest_framework.request import Request
+from rest_framework.response import Response
+
 from rest_api.data_entry.gbk_import import import_gbk_file
-from .serializers import MutationSerializer, SampleSerializer, SamplePropertySerializer
+
 from . import models
+from .serializers import (
+    MutationSerializer,
+    Sample2PropertyBulkCreateOrUpdateSerializer,
+    SampleSerializer,
+    RepliconSerializer,
+    SampleGenomesSerializer,
+)
 
 
-class ElementSerializer(serializers.HyperlinkedModelSerializer):
-    class Meta:
-        model = models.Element
-        fields = [
-            "id",
-            "accession",
-            "symbol",
-            "description",
-            "start",
-            "end",
-            "strand",
-            "sequence",
-            "standard",
-            "parent",
-        ]
+@dataclass
+class PropertyColumnMapping:
+    db_property_name: str
+    data_type: str
 
 
-class ElementReferencesSerializer(serializers.HyperlinkedModelSerializer):
-    id = serializers.ReadOnlyField(source="molecule.reference.id")
-    accession = serializers.ReadOnlyField(source="molecule.reference.accession")
-
-    class Meta:
-        model = models.Element
-        fields = ["id", "accession", "sequence"]
-
-
-class ElementViewSet(viewsets.ModelViewSet):
-    queryset = models.Element.objects.all()
-    serializer_class = ElementSerializer
-
-    @action(detail=False, methods=["get"])
-    def references(self, request: Request, *args, **kwargs):
-        queryset = models.Element.objects.filter(type="source")
-        serializers = ElementReferencesSerializer(queryset, many=True)
-        return Response(serializers.data)
+class RepliconViewSet(viewsets.ModelViewSet):
+    queryset = models.Replicon.objects.all()
+    serializer_class = RepliconSerializer
 
     @action(detail=False, methods=["get"])
     def distinct_genes(self, request: Request, *args, **kwargs):
-        queryset = models.Element.objects.distinct("symbol").values("symbol")
+        queryset = models.Replicon.objects.distinct("symbol").values("symbol")
         if ref := request.query_params.get("reference"):
             queryset = queryset.filter(molecule__reference__accession=ref)
         return Response({"genes": [item["symbol"] for item in queryset]})
@@ -101,49 +93,56 @@ class SampleViewSet(
 
     @action(detail=False, methods=["get"])
     def genomes(self, request: Request, *args, **kwargs):
-        queryset = models.Sample.objects.all()
-        if property_filters := request.query_params.get("properties"):
-            property_filters = json.loads(property_filters)
-            for property_name, filter in property_filters.items():
-                datatype = models.Property.objects.get(name=property_name).datatype
-                query = {f"properties__property__name": property_name}
-                for key, value in filter.items():
-                    query[f"properties__{datatype}__{key}"] = value
-                queryset = queryset.filter(**query)
-        profile_filter_methods = {
-            "snpProfileNtFilters": self.filter_snp_profile_nt,
-            "snpProfileAAFilters": self.filter_snp_profile_aa,
-            "delProfileNtFilters": self.filter_del_profile_nt,
-            "delProfileAAFilters": self.filter_del_profile_aa,
-            "insProfileNtFilters": self.filter_ins_profile_nt,
-            "insProfileAAFilters": self.filter_ins_profile_aa,
-        }
-        for (
-            profile_filter_name,
-            profile_filter_method,
-        ) in profile_filter_methods.items():
-            if profile_filters := request.query_params.get(profile_filter_name):
-                profile_filters = json.loads(profile_filters)
-                for profile_filter in profile_filters:
-                    queryset = profile_filter_method(**profile_filter, qs=queryset)
-        if snp_profile_filters := request.query_params.get("snp_profile_filters"):
-            snp_profile_filters = json.loads(snp_profile_filters)
-            for snp_profile_filter in snp_profile_filters:
-                queryset = self.filter_snp_profile_nt(**snp_profile_filter, qs=queryset)
-        queryset = queryset.prefetch_related("properties__property")
-        # obj.sequence.alignments.filter(mutations__frameshift=1).values_list("mutations__label", flat=True)
-        queryset = queryset.prefetch_related(
-            Prefetch(
-                "sequence__alignments__mutations",
-                queryset=models.Mutation.objects.filter(frameshift="1"),
-                to_attr="frameshifts",
-            )
-        )
-
-        queryset = self.paginate_queryset(queryset)
-        serializer = SampleGenomesSerializer(queryset, many=True)
-        data = serializer.data
-        return self.get_paginated_response(data)
+        try:
+            queryset = models.Sample.objects.all()
+            if property_filters := request.query_params.get("properties"):
+                property_filters = json.loads(property_filters)
+                for property_name, filter in property_filters.items():
+                    if property_name in [
+                        field.name for field in models.Sample._meta.get_fields()
+                    ]:
+                        query = {}
+                        for key, value in filter.items():
+                            query[f"{property_name}__{key}"] = value
+                        queryset = queryset.filter(**query)
+                    else:
+                        datatype = models.Property.objects.get(
+                            name=property_name
+                        ).datatype
+                        query = {f"properties__property__name": property_name}
+                        for key, value in filter.items():
+                            query[f"properties__{datatype}__{key}"] = value
+                        queryset = queryset.filter(**query)
+            profile_filter_methods = {
+                "snpProfileNtFilters": self.filter_snp_profile_nt,
+                "snpProfileAAFilters": self.filter_snp_profile_aa,
+                "delProfileNtFilters": self.filter_del_profile_nt,
+                "delProfileAAFilters": self.filter_del_profile_aa,
+                "insProfileNtFilters": self.filter_ins_profile_nt,
+                "insProfileAAFilters": self.filter_ins_profile_aa,
+            }
+            for (
+                profile_filter_name,
+                profile_filter_method,
+            ) in profile_filter_methods.items():
+                if profile_filters := request.query_params.get(profile_filter_name):
+                    profile_filters = json.loads(profile_filters)
+                    for profile_filter in profile_filters:
+                        queryset = profile_filter_method(**profile_filter, qs=queryset)
+            if snp_profile_filters := request.query_params.get("snp_profile_filters"):
+                snp_profile_filters = json.loads(snp_profile_filters)
+                for snp_profile_filter in snp_profile_filters:
+                    queryset = self.filter_snp_profile_nt(
+                        **snp_profile_filter, qs=queryset
+                    )
+            queryset = queryset.prefetch_related("properties__property")
+            queryset = self.paginate_queryset(queryset)
+            serializer = SampleGenomesSerializer(queryset, many=True)
+            data = serializer.data
+            return self.get_paginated_response(data)
+        except Exception as e:
+            print(e)
+            traceback.print_exc()
 
     @action(detail=False, methods=["get"])
     def download_genomes_export(self, request: Request, *args, **kwargs):
@@ -282,6 +281,143 @@ class SampleViewSet(
         qs = qs.exclude(**filters) if exclude else qs.filter(**filters)
         return qs
 
+    def _convert_date(self, date: str):
+        datetime_obj = datetime.strptime(date, "%Y-%m-%d %H:%M:%S %z")
+        return datetime_obj.date()
+
+    @action(detail=False, methods=["post"])
+    def import_properties_tsv(self, request: Request, *args, **kwargs):
+        print("Importing properties...")
+        sample_id_column = request.data.get("sample_id_column")
+        column_mapping = self._convert_property_column_mapping(
+            json.loads(request.data.get("column_mapping"))
+        )
+        if not sample_id_column or not column_mapping:
+            return Response(
+                "No sample_id_column or column_mapping provided.", status=400
+            )
+        if not request.FILES or "properties_tsv" not in request.FILES:
+            return Response("No file uploaded.", status=400)
+        tsv_file = request.FILES.get("properties_tsv")
+        properties_df = pd.read_csv(
+            self._temp_save_file(tsv_file), sep="\t", dtype=object
+        )
+        sample_property_names = []
+        custom_property_names = []
+        for property_name in properties_df.columns:
+            if property_name in column_mapping.keys():
+                db_property_name = column_mapping[property_name].db_property_name
+                try:
+                    models.Sample._meta.get_field(db_property_name)
+                    sample_property_names.append(db_property_name)
+                except FieldDoesNotExist:
+                    custom_property_names.append(property_name)
+        sample_id_set = set(properties_df[sample_id_column])
+        samples = models.Sample.objects.filter(name__in=sample_id_set).iterator()
+        sample_updates = []
+        property_updates = []
+        print("Updating samples...")
+        properties_df.convert_dtypes()
+        properties_df.set_index(sample_id_column, inplace=True)
+        for sample in samples:
+            row = properties_df[properties_df.index == sample.name]
+            for name, value in row.items():
+                if name in column_mapping.keys():
+                    db_name = column_mapping[name].db_property_name                    
+                    if db_name in sample_property_names:
+                        setattr(sample, db_name, value.values[0])
+            sample_updates.append(sample)
+
+            property_updates += self._create_property_updates(
+                sample,
+                {
+                    column_mapping[name].db_property_name: {
+                        "value": value.values[0],
+                        "datatype": column_mapping[name].data_type,
+                    }
+                    for name, value in row.items()
+                    if name in custom_property_names
+                },
+                True,
+            )
+        print("Saving...")
+        with transaction.atomic():
+            models.Sample.objects.bulk_update(sample_updates, sample_property_names)
+            serializer = Sample2PropertyBulkCreateOrUpdateSerializer(
+                data=property_updates, many=True
+            )
+            serializer.is_valid(raise_exception=True)
+            models.Sample2Property.objects.bulk_create(
+                [models.Sample2Property(**data) for data in serializer.validated_data],
+                update_conflicts=True,
+                update_fields=[
+                    "value_integer",
+                    "value_float",
+                    "value_text",
+                    "value_varchar",
+                    "value_blob",
+                    "value_date",
+                    "value_zip",
+                ],
+                unique_fields=["sample", "property"],
+            )
+        print("Done.")
+        return Response(
+            {
+                "sample_updates": len(sample_updates),
+                "property_updates": len(property_updates),
+            },
+            status=200,
+        )
+
+    def _convert_property_column_mapping(
+        self, column_mapping: dict[str, str]
+    ) -> dict[str, PropertyColumnMapping]:
+        return {
+            db_property_name: PropertyColumnMapping(**db_property_info)
+            for db_property_name, db_property_info in column_mapping.items()
+        }
+
+    def _create_property_updates(
+        self, sample, properties: dict, use_property_cache=False
+    ) -> list[dict]:
+        property_objects = []
+        if use_property_cache and not hasattr(self, "property_cache"):
+            self.property_cache = {}
+        for name, value in properties.items():
+            property = {"sample": sample.id, value["datatype"]: value["value"]}
+            if use_property_cache:
+                if name in self.property_cache.keys():
+                    property["property"] = self.property_cache[name]
+                else:
+                    property["property"] = self.property_cache[
+                        name
+                    ] = models.Property.objects.get_or_create(
+                        name=name, datatype=value["datatype"]
+                    )[
+                        0
+                    ].id
+            else:
+                property["property__name"] = name
+            property_objects.append(property)
+        return property_objects
+
+    def _import_tsv(self, file_path):
+        header = None
+        with open(file_path, "r") as f:
+            reader = csv.reader(f, delimiter="\t")
+            for row in reader:
+                if not header:
+                    header = row
+                else:
+                    yield dict(zip(header, row))
+
+    def _temp_save_file(self, uploaded_file: InMemoryUploadedFile):
+        file_path = pathlib.Path("import_data") / uploaded_file.name
+        with open(file_path, "wb") as f:
+            f.write(uploaded_file.read())
+        return file_path
+
 
 class ReferenceSerializer(serializers.HyperlinkedModelSerializer):
     sequence = serializers.CharField(source="molecules.elements.sequence")
@@ -299,42 +435,13 @@ class ReferenceViewSet(
     queryset = models.Reference.objects.all()
     serializer_class = ReferenceSerializer
 
-    @action(detail=False, methods=["put"])
+    @action(detail=False, methods=["post"])
     def import_gbk(self, request: Request, *args, **kwargs):
         if not request.FILES or "gbk_file" not in request.FILES:
             return Response("No file uploaded.")
         gbk_file = request.FILES.get("gbk_file")
-        standard = bool(request.data["standard"])
-        import_gbk_file(gbk_file, standard)
+        import_gbk_file(gbk_file)
         return Response("OK")
-
-
-class GenesSerializer(serializers.HyperlinkedModelSerializer):
-    reference_accession = serializers.CharField(source="molecule.reference.accession")
-
-    class Meta:
-        model = models.Element
-        fields = [
-            "reference_accession",
-            "type",
-            "symbol",
-            "description",
-            "start",
-            "end",
-            "strand",
-            "sequence",
-        ]
-
-
-class GenesViewSet(
-    viewsets.GenericViewSet,
-    generics.mixins.ListModelMixin,
-    generics.mixins.RetrieveModelMixin,
-):
-    queryset = models.Element.objects.all()
-    serializer_class = GenesSerializer
-    filter_backends = [DjangoFilterBackend]
-    filterset_fields = ["molecule__reference__accession", "type"]
 
 
 class SNP1Serializer(serializers.HyperlinkedModelSerializer):
@@ -478,6 +585,8 @@ class PropertyViewSet(
         queryset = models.Property.objects.all()
         queryset = queryset.distinct("name")
         property_names = [item.name for item in queryset]
+        sample_properties = models.Sample._meta.get_fields()
+        property_names += [item.name for item in sample_properties]
         return Response(data={"property_names": property_names})
 
 
@@ -497,7 +606,7 @@ class AAMutationViewSet(
 ):
     # input sequencing_tech list, country list, gene list, include partial bool,
     # reference_value int, min_nb_freq int = 1?
-    queryset = models.Element.objects.all()
+    queryset = models.Replicon.objects.all()
 
     @action(detail=False, methods=["get"])
     def mutation_frequency(self, request: Request, *args, **kwargs):
@@ -542,57 +651,6 @@ class AAMutationViewSet(
         return Response(data=response)
 
 
-class MutationLabelSerializer(serializers.Serializer):
-    labels = serializers.ListField()
-
-
-class SampleGenomesSerializer(serializers.HyperlinkedModelSerializer):
-    properties = SamplePropertySerializer(many=True, read_only=True)
-    frameshifts = serializers.SerializerMethodField()
-    # genomic_profiles = serializers.SerializerMethodField()
-    # proteomic_profiles = serializers.SerializerMethodField()
-
-    class Meta:
-        model = models.Sample
-        fields = [
-            "id",
-            "name",
-            "sequence_id",
-            "datahash",
-            "properties",
-            "frameshifts",
-            # "genomic_profiles",
-            # "proteomic_profiles",
-        ]
-
-    def get_frameshifts(self, obj: models.Sample):
-        return obj.frameshifts
-
-    def get_genomic_profiles(self, obj: models.Sample):
-        query = (
-            obj.sequence.alignments.exclude(mutations__alt="N")
-            .filter(mutations__element__type="gene")
-            .values_list("mutations__label", flat=True)
-        )
-        return query
-
-    def get_proteomic_profiles(self, obj: models.Sample):
-        query = (
-            obj.sequence.alignments.exclude(mutations__alt="X")
-            .filter(mutations__element__type="cds")
-            .values_list("mutations__label", flat=True)
-        )
-        return MutationLabelSerializer({"labels": query}).data
-
-    def csv_line(self):
-        line = []
-        for key in self.data.keys():
-            if key == "properties":
-                for prop in self.data[key]:
-                    line.append(str(prop["value"]))
-            else:
-                line.append(str(self.data[key]))
-        return ",".join(line)
 
 
 class SampleGenomeViewSet(viewsets.GenericViewSet, generics.mixins.ListModelMixin):

@@ -362,11 +362,11 @@ def import_properties():
         dbm.add_property(*prop, "sample", check_name=False)
 
     predifined_properties = [
-        ("SEQ_TECH", "text", "text", "Sequencing technologies"),
+        ("SEQUENCING_TECH", "text", "text", "Sequencing technologies"),
         ("PROCESSING_DATE", "date", "date", "Submission/Processing date"),
         ("COUNTRY", "text", "text", "Country where a sample belongs to"),
         ("HOST", "text", "text", "e.g., HUMAN"),
-        ("ZIP", "text", "text", "zip code e.g., 33602"),
+        ("ZIP_CODE", "text", "text", "zip code e.g., 33602"),
         ("LAB", "text", "text", "lab id e.g., 11069"),
         ("LINEAGE", "text", "text", "e.g., BA.2 or B.1.1.7"),
         ("TECHNOLOGY", "text", "text", "e.g., ILLUMINA"),

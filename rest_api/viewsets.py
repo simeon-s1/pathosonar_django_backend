@@ -1,18 +1,16 @@
 import csv
 import json
 import pathlib
-import time
+import traceback
 from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
-import traceback
-from typing import TYPE_CHECKING
 from django.http import HttpResponse
+
 import pandas as pd
 from django.core.exceptions import FieldDoesNotExist
 from django.core.files.uploadedfile import InMemoryUploadedFile
-from django.db.models import Count, F, Prefetch, QuerySet
 from django.db import transaction
+from django.db.models import Count, F, Q, QuerySet, Prefetch
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import generics, serializers, viewsets
 from rest_framework.decorators import action
@@ -24,11 +22,21 @@ from rest_api.data_entry.gbk_import import import_gbk_file
 from . import models
 from .serializers import (
     MutationSerializer,
-    Sample2PropertyBulkCreateOrUpdateSerializer,
-    SampleSerializer,
     RepliconSerializer,
+    Sample2PropertyBulkCreateOrUpdateSerializer,
     SampleGenomesSerializer,
+    SampleSerializer,
 )
+
+
+class Echo:
+    """An object that implements just the write method of the file-like
+    interface.
+    """
+
+    def write(self, value):
+        """Write the value by returning it, instead of storing in a buffer."""
+        return value
 
 
 @dataclass
@@ -47,6 +55,17 @@ class RepliconViewSet(viewsets.ModelViewSet):
         if ref := request.query_params.get("reference"):
             queryset = queryset.filter(molecule__reference__accession=ref)
         return Response({"genes": [item["symbol"] for item in queryset]})
+
+
+class GeneViewSet(viewsets.ModelViewSet):
+    queryset = models.Gene.objects.all()
+
+    @action(detail=False, methods=["get"])
+    def distinct_gene_symbols(self, request: Request, *args, **kwargs):
+        queryset = models.Gene.objects.distinct("gene_symbol").values("gene_symbol")
+        if ref := request.query_params.get("reference"):
+            queryset = queryset.filter(molecule__reference__accession=ref)
+        return Response({"gene_symbols": [item["gene_symbol"] for item in queryset]})
 
 
 class MutationViewSet(
@@ -95,99 +114,136 @@ class SampleViewSet(
     def genomes(self, request: Request, *args, **kwargs):
         try:
             queryset = models.Sample.objects.all()
-            if property_filters := request.query_params.get("properties"):
-                property_filters = json.loads(property_filters)
-                for property_name, filter in property_filters.items():
-                    if property_name in [
-                        field.name for field in models.Sample._meta.get_fields()
-                    ]:
-                        query = {}
-                        for key, value in filter.items():
-                            query[f"{property_name}__{key}"] = value
-                        queryset = queryset.filter(**query)
-                    else:
-                        datatype = models.Property.objects.get(
-                            name=property_name
-                        ).datatype
-                        query = {f"properties__property__name": property_name}
-                        for key, value in filter.items():
-                            query[f"properties__{datatype}__{key}"] = value
-                        queryset = queryset.filter(**query)
-            profile_filter_methods = {
-                "snpProfileNtFilters": self.filter_snp_profile_nt,
-                "snpProfileAAFilters": self.filter_snp_profile_aa,
-                "delProfileNtFilters": self.filter_del_profile_nt,
-                "delProfileAAFilters": self.filter_del_profile_aa,
-                "insProfileNtFilters": self.filter_ins_profile_nt,
-                "insProfileAAFilters": self.filter_ins_profile_aa,
-            }
-            for (
-                profile_filter_name,
-                profile_filter_method,
-            ) in profile_filter_methods.items():
-                if profile_filters := request.query_params.get(profile_filter_name):
-                    profile_filters = json.loads(profile_filters)
-                    for profile_filter in profile_filters:
-                        queryset = profile_filter_method(**profile_filter, qs=queryset)
-            if snp_profile_filters := request.query_params.get("snp_profile_filters"):
-                snp_profile_filters = json.loads(snp_profile_filters)
-                for snp_profile_filter in snp_profile_filters:
-                    queryset = self.filter_snp_profile_nt(
-                        **snp_profile_filter, qs=queryset
-                    )
-            queryset = queryset.prefetch_related("properties__property")
+            if filter_params := request.query_params.get("filters"):
+                filters = json.loads(filter_params)
+                queryset = self.resolve_genome_filter(filters)
+            genomic_profiles_qs = models.Mutation.objects.filter(
+                ~Q(alt="N"), type="nt"
+            ).only("label")
+            proteomic_profiles_qs = models.Mutation.objects.filter(
+                ~Q(alt="X"), type="cds"
+            ).only("label")
+            queryset = queryset.select_related("sequence").prefetch_related(
+                Prefetch(
+                    "sequence__alignments__mutations",
+                    queryset=genomic_profiles_qs,
+                    to_attr="genomic_profiles",
+                ),
+                Prefetch(
+                    "sequence__alignments__mutations",
+                    queryset=proteomic_profiles_qs,
+                    to_attr="proteomic_profiles",
+                ),
+            )
+            queryset = queryset.prefetch_related(
+                "properties__property",
+            )
             queryset = self.paginate_queryset(queryset)
             serializer = SampleGenomesSerializer(queryset, many=True)
-            data = serializer.data
-            return self.get_paginated_response(data)
+            return self.get_paginated_response(serializer.data)
         except Exception as e:
             print(e)
             traceback.print_exc()
+            raise e
+
+    def resolve_genome_filter(self, filters) -> QuerySet:
+        queryset = models.Sample.objects.all()
+        filter_methods = {
+            "Property": self.filter_property,
+            '"Label"': self.filter_label,
+            "SNP Nt": self.filter_snp_profile_nt,
+            "SNP AA": self.filter_snp_profile_aa,
+            "Del Nt": self.filter_del_profile_nt,
+            "Del AA": self.filter_del_profile_aa,
+            "Ins Nt": self.filter_ins_profile_nt,
+            "Ins AA": self.filter_ins_profile_aa,
+        }
+        for filter in filters.get("andFilter", []):
+            method = filter_methods.get(filter.get("label"))
+            if method:
+                queryset = method(qs=queryset, **filter)
+            else:
+                raise Exception(f"filter_method not found for:{filter.get('label')}")
+        or_query = Q()
+        if len(filters.get("andFilter", [])) > 0:
+            or_query |= Q(id__in=queryset)
+        for or_filter in filters.get("orFilter", []):
+            or_query |= Q(id__in=self.resolve_genome_filter(or_filter))
+        return models.Sample.objects.filter(or_query)
 
     @action(detail=False, methods=["get"])
     def download_genomes_export(self, request: Request, *args, **kwargs):
-        start_time = time.time()
         queryset = models.Sample.objects.all()
-        if property_filters := request.query_params.get("properties"):
-            property_filters = json.loads(property_filters)
-            for property_name, filter in property_filters.items():
-                datatype = models.Property.objects.get(name=property_name).datatype
-                query = {f"properties__property__name": property_name}
-                for key, value in filter.items():
-                    query[f"properties__{datatype}__{key}"] = value
-                queryset = queryset.filter(**query)
-        queryset.prefetch_related(
-            "sequence__alignments__mutations__element__molecule__reference"
+        if filter_params := request.query_params.get("filters"):
+            filters = json.loads(filter_params)
+            queryset = self.resolve_genome_filter(filters)
+        response = HttpResponse(content=queryset, content_type="text/csv")
+
+    def filter_label(
+        self,
+        value,
+        exclude: bool = False,
+        qs: QuerySet | None = None,
+        *args,
+        **kwargs,
+    ):
+        if qs is None:
+            qs = models.Sample.objects.all()
+        alignment_qs = models.Alignment.objects.filter(
+            mutations__label=value,
         )
-        queryset.prefetch_related("properties__property")
-        # save queryset as file:
-        line_count = 0
-        with open("genomes_export.csv", "w") as file:
-            for sample in queryset.iterator():
-                file.writelines(str(SampleGenomesSerializer(sample).data))
-                file.write("\n")
-                line_count += 1
-                if line_count % 100 == 0:
-                    print(f"{line_count} lines written")
-        print("--- %s seconds ---" % (time.time() - start_time))
-        return Response("OK")
+        qs = (
+            qs.filter(~Q(sequence__alignments__in=alignment_qs))
+            if exclude
+            else qs.filter(sequence__alignments__in=alignment_qs)
+        )
+        return qs
+
+    def filter_property(
+        self,
+        property_name,
+        filter_type,
+        value,
+        exclude: bool = False,
+        qs: QuerySet | None = None,
+        *args,
+        **kwargs,
+    ):
+        if qs is None:
+            qs = models.Sample.objects.all()
+            qs.prefetch_related("properties__property")
+        if property_name in [field.name for field in models.Sample._meta.get_fields()]:
+            query = {}
+            query[f"{property_name}__{filter_type}"] = value
+        else:
+            datatype = models.Property.objects.get(name=property_name).datatype
+            query = {f"properties__property__name": property_name}
+            query[f"properties__{datatype}__{filter_type}"] = value
+        qs = qs.exclude(**query) if exclude else qs.filter(**query)
+        return qs
 
     def filter_snp_profile_nt(
         self,
+        gene_symbol: str,
         ref_nuc: str,
         ref_pos: int,
         alt_nuc: str,
         qs: QuerySet | None = None,
         exclude: bool = False,
+        *args,
+        **kwargs,
     ) -> QuerySet:
         # For NT: ref_nuc followed by ref_pos followed by alt_nuc (e.g. T28175C).
         if qs is None:
-            qs = models.Mutation.objects.all()
-        filters = {
-            "start": ref_pos,
-            "ref": ref_nuc,
-            "alt": alt_nuc,
-        }
+            qs = models.Sample.objects.all()
+        alignment_qs = models.Alignment.objects.filter(
+            mutations__end=ref_pos,
+            mutations__ref=ref_nuc,
+            mutations__alt=alt_nuc,
+            mutations__gene__gene_symbol=gene_symbol,
+            mutations__type="nt",
+        )
+        filters = {"sequence__alignments__in": alignment_qs}
         qs = qs.exclude(**filters) if exclude else qs.filter(**filters)
         return qs
 
@@ -199,17 +255,20 @@ class SampleViewSet(
         alt_aa: str,
         qs: QuerySet | None = None,
         exclude: bool = False,
+        *args,
+        **kwargs,
     ) -> QuerySet:
         # For AA: protein_symbol:ref_aa followed by ref_pos followed by alt_aa (e.g. OPG098:E162K)
         if qs is None:
-            qs = models.Mutation.objects.filter(
-                element__molecule__symbol=protein_symbol
-            )
-        filters = {
-            "start": ref_pos,
-            "ref": ref_aa,
-            "alt": alt_aa,
-        }
+            qs = models.Sample.objects.all()
+        alignment_qs = models.Alignment.objects.filter(
+            mutations__start=ref_pos,
+            mutations__ref=ref_aa,
+            mutations__alt=alt_aa,
+            mutations__gene__gene_symbol=protein_symbol,
+            mutations__type="cds",
+        )
+        filters = {"sequence__alignments__in": alignment_qs}
         qs = qs.exclude(**filters) if exclude else qs.filter(**filters)
         return qs
 
@@ -217,11 +276,25 @@ class SampleViewSet(
         self,
         first_deleted_nt: str,
         last_deleted_nt: str,
+        gene_symbol: str,
         qs: QuerySet | None = None,
+        exclude: bool = False,
+        *args,
+        **kwargs,
     ) -> QuerySet:
         # For NT: del:first_NT_deleted-last_NT_deleted (e.g. del:133177-133186).
         if qs is None:
-            qs = models.Mutation.objects.all()
+            qs = models.Sample.objects.all()
+        alignment_qs = models.Alignment.objects.filter(
+            mutations__gene__gene_symbol=gene_symbol,
+            mutations__start=int(first_deleted_nt) - 1,
+            mutations__end=last_deleted_nt,
+            mutations__alt__in=[" ", "", None],
+            mutations__type="nt",
+        )
+        filters = {"sequence__alignments__in": alignment_qs}
+        qs = qs.exclude(**filters) if exclude else qs.filter(**filters)
+        return qs
 
     def filter_del_profile_aa(
         self,
@@ -230,32 +303,45 @@ class SampleViewSet(
         last_deleted_aa: int,
         exclude: bool = False,
         qs: QuerySet | None = None,
+        *args,
+        **kwargs,
     ) -> QuerySet:
         # For AA: protein_symbol:del:first_AA_deleted-last_AA_deleted (e.g. OPG197:del:34-35)
         if qs is None:
-            qs = models.Mutation.objects.filter(
-                element__molecule__symbol=protein_symbol
-            )
-        filters = {"start": first_deleted_aa - 1, "end": last_deleted_aa, "alt": ""}
+            qs = models.Sample.objects.all()
+        alignment_qs = models.Alignment.objects.filter(
+            mutations__gene__gene_symbol=protein_symbol,
+            mutations__start=int(first_deleted_aa) - 1,
+            mutations__end=last_deleted_aa,
+            mutations__alt__in=[" ", "", None],
+            mutations__type="cds",
+        )
+        filters = {"sequence__alignments__in": alignment_qs}
         qs = qs.exclude(**filters) if exclude else qs.filter(**filters)
         return qs
 
     def filter_ins_profile_nt(
         self,
+        gene_symbol: str,
         ref_nuc: str,
         ref_pos: int,
         alt_nucs: str,
         qs: QuerySet | None = None,
         exclude: bool = False,
+        *args,
+        **kwargs,
     ) -> QuerySet:
         # For NT: ref_nuc followed by ref_pos followed by alt_nucs (e.g. T133102TTT)
         if qs is None:
-            qs = models.Mutation.objects.all()
-        filters = {
-            "start": ref_pos,
-            "ref": ref_nuc,
-            "alt": alt_nucs,
-        }
+            qs = models.Sample.objects.all()
+        alignment_qs = models.Alignment.objects.filter(
+            mutations__end=ref_pos,
+            mutations__ref=ref_nuc,
+            mutations__alt=alt_nucs,
+            mutations__gene__gene_symbol=gene_symbol,
+            mutations__type="nt",
+        )
+        filters = {"sequence__alignments__in": alignment_qs}
         qs = qs.exclude(**filters) if exclude else qs.filter(**filters)
         return qs
 
@@ -267,17 +353,20 @@ class SampleViewSet(
         alt_aas: str,
         qs: QuerySet | None = None,
         exclude: bool = False,
+        *args,
+        **kwargs,
     ) -> QuerySet:
         # For AA: protein_symbol:ref_aa followed by ref_pos followed by alt_aas (e.g. OPG197:A34AK)
         if qs is None:
-            qs = models.Mutation.objects.filter(
-                element__molecule__symbol=protein_symbol
-            )
-        filters = {
-            "start": ref_pos,
-            "ref": ref_aa,
-            "alt": alt_aas,
-        }
+            qs = models.Sample.objects.all()
+        alignment_qs = models.Alignment.objects.filter(
+            mutations__end=ref_pos,
+            mutations__ref=ref_aa,
+            mutations__alt=alt_aas,
+            mutations__gene__gene_symbol=protein_symbol,
+            mutations__type="cds",
+        )
+        filters = {"sequence__alignments__in": alignment_qs}
         qs = qs.exclude(**filters) if exclude else qs.filter(**filters)
         return qs
 
@@ -323,7 +412,7 @@ class SampleViewSet(
             row = properties_df[properties_df.index == sample.name]
             for name, value in row.items():
                 if name in column_mapping.keys():
-                    db_name = column_mapping[name].db_property_name                    
+                    db_name = column_mapping[name].db_property_name
                     if db_name in sample_property_names:
                         setattr(sample, db_name, value.values[0])
             sample_updates.append(sample)
@@ -542,6 +631,25 @@ class PropertyViewSet(
     filterset_fields = ["sample__id", "property__name"]
 
     @action(detail=False, methods=["get"])
+    def distinct_properties(self, request: Request, *args, **kwargs):
+        if not (property_name := request.query_params.get("property_name")):
+            return Response("No property_name provided.")
+        sample_property_fields = [
+            field.name for field in models.Sample._meta.get_fields()
+        ]
+        print(property_name in sample_property_fields)
+        if property_name in sample_property_fields:
+            queryset = models.Sample.objects.all()
+            queryset = queryset.distinct(property_name)
+            return Response(
+                {"values": [getattr(item, property_name) for item in queryset]}
+            )
+        queryset = models.Sample2Property.objects.filter(property__name=property_name)
+        datatype = queryset[0].property.datatype
+        queryset = queryset.distinct(datatype)
+        return Response({"values": [getattr(item, datatype) for item in queryset]})
+
+    @action(detail=False, methods=["get"])
     def unique_collection_dates(self, request: Request, *args, **kwargs):
         queryset = models.Sample2Property.objects.filter(
             property__name="COLLECTION_DATE", value_date__isnull=False
@@ -649,8 +757,6 @@ class AAMutationViewSet(
         ]
 
         return Response(data=response)
-
-
 
 
 class SampleGenomeViewSet(viewsets.GenericViewSet, generics.mixins.ListModelMixin):

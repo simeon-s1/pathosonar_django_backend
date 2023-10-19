@@ -15,7 +15,6 @@ from pathlib import Path
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
 
@@ -23,8 +22,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = "django-insecure-ixxtp)b-0*btccc*^(4$@lt2g*@rg6xxtea!x@vc0un)$xzren"
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
-# DEBUG = False
+# DEBUG = True
+DEBUG = False
 
 if not DEBUG:
     ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
@@ -39,10 +38,10 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "rest_api.apps.RestApiConfig",
     "rest_framework",
     "corsheaders",
     "django_filters",
-    "rest_api",
     "django_apscheduler",
 ]
 REST_FRAMEWORK = {
@@ -145,3 +144,7 @@ if DEBUG:
     DEBUG_TOOLBAR_CONFIG = {
         "INTERCEPT_REDIRECTS": False,
     }
+
+DATA_UPLOAD_MAX_MEMORY_SIZE  = None
+
+APSCHEDULER_RUN_NOW_TIMEOUT = 60*60*5

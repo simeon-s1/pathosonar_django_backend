@@ -1,3 +1,4 @@
+from datetime import datetime
 from django.db import models
 from django.db.models import UniqueConstraint
 
@@ -12,12 +13,17 @@ class Sequence(models.Model):
 
 class Alignment(models.Model):
     id = models.BigAutoField(primary_key=True)
-    element = models.BigIntegerField(blank=True, null=True)
+    gene = models.ForeignKey("Gene", models.DO_NOTHING, blank=True, null=True)
     sequence = models.ForeignKey(
         "Sequence", models.DO_NOTHING, blank=True, null=True, related_name="alignments"
     )
 
     class Meta:
+        indexes = [
+            models.Index(
+                fields=["gene", "sequence"],
+            )
+        ]
         db_table = "alignment"
 
 
@@ -26,6 +32,11 @@ class Alignment2Mutation(models.Model):
     mutation = models.ForeignKey("Mutation", models.DO_NOTHING, blank=True, null=True)
 
     class Meta:
+        indexes = [
+            models.Index(
+                fields=["alignment", "mutation"],
+            )
+        ]
         db_table = "alignment2mutation"
         unique_together = (("mutation", "alignment"),)
 
@@ -40,27 +51,39 @@ class AnnotationType(models.Model):
         db_table = "annotation_type"
 
 
-class Element(models.Model):
+class Replicon(models.Model):
     id = models.BigAutoField(primary_key=True)
-    type = models.CharField(blank=True, null=True)
+    length = models.BigIntegerField(blank=True, null=True)
+    sequence = models.TextField(blank=True, null=True)
     accession = models.CharField(unique=True, blank=True, null=True)
-    symbol = models.CharField(blank=True, null=True)
+    description = models.CharField(blank=True, null=True)
+    type = models.CharField(blank=True, null=True)
+    segment_number = models.BigIntegerField(blank=True, null=True)
+    reference = models.ForeignKey("Reference", models.DO_NOTHING, blank=True, null=True)
+
+    class Meta:
+        db_table = "replicon"
+
+
+class Gene(models.Model):
+    id = models.BigAutoField(primary_key=True)
     description = models.CharField(blank=True, null=True)
     start = models.BigIntegerField(blank=True, null=True)
     end = models.BigIntegerField(blank=True, null=True)
     strand = models.BigIntegerField(blank=True, null=True)
-    sequence = models.TextField(blank=True, null=True)
-    standard = models.BooleanField(blank=True, null=True)
-    parent_id = models.BigIntegerField(blank=True, null=True)
-    molecule = models.ForeignKey("Molecule", models.DO_NOTHING, blank=True, null=True)
+    gene_symbol = models.CharField(blank=True, null=True)
+    gene_accession = models.CharField(unique=True, blank=True, null=True)
+    gene_sequence = models.TextField(blank=True, null=True)
+    cds_sequence = models.TextField(blank=True, null=True)
+    replicon = models.ForeignKey(Replicon, models.DO_NOTHING, blank=True, null=True)
 
     class Meta:
-        db_table = "element"
+        db_table = "gene"
 
 
-class Elempart(models.Model):
+class GeneSegment(models.Model):
     id = models.BigAutoField(primary_key=True)
-    element = models.ForeignKey(Element, models.DO_NOTHING, blank=True, null=True)
+    gene = models.ForeignKey(Gene, models.DO_NOTHING, blank=True, null=True)
     start = models.BigIntegerField()
     end = models.BigIntegerField()
     strand = models.BigIntegerField()
@@ -68,31 +91,21 @@ class Elempart(models.Model):
     segment = models.BigIntegerField()
 
     class Meta:
-        db_table = "elempart"
+        db_table = "gene_segment"
 
 
 class Lineages(models.Model):
     id = models.BigAutoField(primary_key=True)
-    lineage = models.CharField(max_length=100)
-    sublineage = models.CharField(blank=True, null=True)
+    lineage = models.CharField(max_length=100, unique=True)
+    parent_lineage = models.ForeignKey(
+        "self",
+        on_delete=models.DO_NOTHING,
+        blank=True,
+        null=True,
+    )
 
     class Meta:
         db_table = "lineages"
-
-
-class Molecule(models.Model):
-    id = models.BigAutoField(primary_key=True)
-    reference = models.ForeignKey("Reference", models.DO_NOTHING, blank=True, null=True)
-    accession = models.CharField(unique=True, blank=True, null=True)
-    symbol = models.CharField(blank=True, null=True)
-    description = models.CharField(blank=True, null=True)
-    length = models.BigIntegerField(blank=True, null=True)
-    segment = models.BigIntegerField(blank=True, null=True)
-    standard = models.BooleanField(blank=True, null=True)
-    type = models.CharField(blank=True, null=True)
-
-    class Meta:
-        db_table = "molecule"
 
 
 class Reference(models.Model):
@@ -100,8 +113,12 @@ class Reference(models.Model):
     accession = models.CharField(unique=True, blank=True, null=True)
     description = models.CharField(blank=True, null=True)
     organism = models.CharField(blank=True, null=True)
-    translation_group = models.ForeignKey("TranslationGroup", models.DO_NOTHING)
-    standard = models.BooleanField(blank=True, null=True)
+    mol_type = models.CharField(blank=True, null=True)
+    isolate = models.CharField(blank=True, null=True)
+    host = models.CharField(blank=True, null=True)
+    db_xref = models.CharField(blank=True, null=True, unique=True)
+    country = models.CharField(blank=True, null=True)
+    collection_date = models.DateField(blank=True, null=True)
 
     class Meta:
         db_table = "reference"
@@ -109,8 +126,8 @@ class Reference(models.Model):
 
 class Property(models.Model):
     id = models.BigAutoField(primary_key=True)
-    name = models.CharField(unique=True, blank=True, null=True)
-    datatype = models.CharField(blank=True, null=True)
+    name = models.CharField(unique=True)
+    datatype = models.CharField()
     querytype = models.CharField(blank=True, null=True)
     description = models.CharField(blank=True, null=True)
     target = models.CharField(blank=True, null=True)
@@ -127,6 +144,16 @@ class Sample(models.Model):
     sequence = models.ForeignKey(
         Sequence, models.DO_NOTHING, blank=True, null=True, related_name="samples"
     )
+    sequencing_tech = models.CharField(blank=True, null=True)
+    processing_date = models.DateField(blank=True, null=True)
+    country = models.CharField(blank=True, null=True)
+    host = models.CharField(blank=True, null=True)
+    zip_code = models.CharField(blank=True, null=True)
+    lab = models.CharField(blank=True, null=True)
+    lineage = models.CharField(blank=True, null=True)
+    genome_completeness = models.CharField(blank=True, null=True)
+    length = models.IntegerField(blank=True, null=True)
+    collection_date = models.DateField(blank=True, null=True)
 
     class Meta:
         db_table = "sample"
@@ -150,29 +177,9 @@ class Sample2Property(models.Model):
         unique_together = (("property", "sample"),)
 
 
-class Translation(models.Model):
-    id = models.BigAutoField(primary_key=True)
-    group = models.ForeignKey(
-        "TranslationGroup", models.DO_NOTHING, blank=True, null=True
-    )
-    codon = models.CharField(blank=True, null=True)
-    aa = models.CharField(blank=True, null=True)
-
-    class Meta:
-        db_table = "translation"
-        unique_together = (("group", "codon"),)
-
-
-class TranslationGroup(models.Model):
-    id = models.BigAutoField(primary_key=True)
-
-    class Meta:
-        db_table = "translation_group"
-
-
 class Mutation(models.Model):
     id = models.BigAutoField(primary_key=True)
-    element = models.ForeignKey(Element, models.DO_NOTHING, blank=True, null=True)
+    gene = models.ForeignKey("Gene", models.DO_NOTHING, blank=True, null=True)
     ref = models.CharField(blank=True, null=True)
     alt = models.CharField(blank=True, null=True)
     start = models.BigIntegerField(blank=True, null=True)
@@ -183,21 +190,29 @@ class Mutation(models.Model):
     alignments = models.ManyToManyField(
         Alignment, through="Alignment2Mutation", related_name="mutations"
     )
+    type = models.CharField(blank=True, null=True)  # cds / nt / intergenic
 
     class Meta:
         db_table = "mutation"
+        indexes = [
+            models.Index(fields=["gene"]),
+            models.Index(fields=["start"]),
+            models.Index(fields=["end"]),
+            models.Index(fields=["ref"]),
+            models.Index(fields=["alt"]),
+            models.Index(fields=["label"]),
+            models.Index(fields=["type"]),
+        ]
         UniqueConstraint(
             name="unique_mutation",
             fields=[
-                "element",
                 "ref",
                 "alt",
                 "start",
                 "end",
-                "parent_id",
-                "label",
                 "frameshift",
-            ]
+                "type"
+            ],
         )
 
 

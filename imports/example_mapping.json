@@ -1,0 +1,27 @@
+{
+  "SEQUENCE.DATE_OF_SAMPLING": {
+    "db_property_name": "collection_date",
+    "data_type": "value_varchar"
+  },
+  "SEQUENCE.SEQUENCING_METHOD": {
+    "db_property_name": "sequencing_tech",
+    "data_type": "value_varchar"
+  },
+  "DL.POSTAL_CODE": {
+    "db_property_name": "zip_code",
+    "data_type": "value_varchar"
+  },
+  "SL.ID": { "db_property_name": "lab", "data_type": "value_varchar" },
+  "PANGOLIN.LINEAGE_LATEST": {
+    "db_property_name": "lineage",
+    "data_type": "value_varchar"
+  },
+  "SEQUENCE.SEQUENCING_REASON": {
+    "db_property_name": "sequencing_reason",
+    "data_type": "value_varchar"
+  },
+  "SEQUENCE.SAMPLE_TYPE": {
+    "db_property_name": "sample_type",
+    "data_type": "value_varchar"
+  }
+}

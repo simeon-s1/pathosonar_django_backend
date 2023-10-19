@@ -1,0 +1,14 @@
+DB unique keys:
+- mutation duplicates - enforce unique_together
+- gene accession - enforce unique
+
+DB Issues:
+- mutation start and end are zero based index, label is 1 based index
+
+Open Tasks:
+- lineages table and filter
+- mutation annotations
+    POS = 
+    ANN[*.EFFECT] = annotation_type
+- exclude q object performance check
+- property exclude

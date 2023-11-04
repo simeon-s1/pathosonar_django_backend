@@ -117,12 +117,12 @@ class SampleViewSet(
             if filter_params := request.query_params.get("filters"):
                 filters = json.loads(filter_params)
                 queryset = self.resolve_genome_filter(filters)
-            genomic_profiles_qs = models.Mutation.objects.filter(
+            profiles_qs = models.Mutation.objects.filter(
                 ~Q(alt="N"), type="nt"
-            ).only("label")
+            ).only("ref", "alt", "start")
             proteomic_profiles_qs = models.Mutation.objects.filter(
                 ~Q(alt="X"), type="cds"
-            ).only("label")
+            ).only("ref", "alt", "start")
             queryset = queryset.select_related("sequence").prefetch_related(
                 Prefetch(
                     "sequence__alignments__mutations",
@@ -148,9 +148,8 @@ class SampleViewSet(
 
     def resolve_genome_filter(self, filters) -> QuerySet:
         queryset = models.Sample.objects.all()
-        filter_methods = {
+        filter_label_to_methods = {
             "Property": self.filter_property,
-            '"Label"': self.filter_label,
             "SNP Nt": self.filter_snp_profile_nt,
             "SNP AA": self.filter_snp_profile_aa,
             "Del Nt": self.filter_del_profile_nt,
@@ -159,7 +158,7 @@ class SampleViewSet(
             "Ins AA": self.filter_ins_profile_aa,
         }
         for filter in filters.get("andFilter", []):
-            method = filter_methods.get(filter.get("label"))
+            method = filter_label_to_methods.get(filter.get("label"))
             if method:
                 queryset = method(qs=queryset, **filter)
             else:
@@ -171,6 +170,7 @@ class SampleViewSet(
             or_query |= Q(id__in=self.resolve_genome_filter(or_filter))
         return models.Sample.objects.filter(or_query)
 
+    # WIP - not working yet
     @action(detail=False, methods=["get"])
     def download_genomes_export(self, request: Request, *args, **kwargs):
         queryset = models.Sample.objects.all()
@@ -178,26 +178,6 @@ class SampleViewSet(
             filters = json.loads(filter_params)
             queryset = self.resolve_genome_filter(filters)
         response = HttpResponse(content=queryset, content_type="text/csv")
-
-    def filter_label(
-        self,
-        value,
-        exclude: bool = False,
-        qs: QuerySet | None = None,
-        *args,
-        **kwargs,
-    ):
-        if qs is None:
-            qs = models.Sample.objects.all()
-        alignment_qs = models.Alignment.objects.filter(
-            mutations__label=value,
-        )
-        qs = (
-            qs.filter(~Q(sequence__alignments__in=alignment_qs))
-            if exclude
-            else qs.filter(sequence__alignments__in=alignment_qs)
-        )
-        return qs
 
     def filter_property(
         self,

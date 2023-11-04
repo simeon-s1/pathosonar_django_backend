@@ -1,9 +1,11 @@
 import pathlib
 import pickle
 from dataclasses import dataclass
-from rest_api.models import Sequence, Sample, Alignment, Mutation, Gene
-from rest_api.serializers import SampleSerializer, MutationSerializer, find_or_create
-from threading import Lock
+
+from django.db.models import Q
+
+from rest_api.models import Alignment, Gene, Mutation, Replicon, Sample, Sequence
+from rest_api.serializers import SampleSerializer
 
 
 @dataclass
@@ -29,6 +31,7 @@ class SampleRaw:
     tt_file: str
     var_file: str
     vcffile: str
+    source_acc: str
 
 
 @dataclass
@@ -37,21 +40,18 @@ class VarRaw:
     start: int
     end: int
     alt: str | None
-    element_id: int
-    label: str
-    frameshift: bool
+    replicon_or_cds_accession: str
+    type: str
 
 
 class SampleImport:
     def __init__(
         self,
         path: pathlib.Path,
-        mutation_cache: dict[str, Mutation],
         import_folder="import_data",
-    ):        
+    ):
         self.sample_file_path = path
         self.import_folder = import_folder
-        self.mutation_cache = mutation_cache
         self.sample_raw = SampleRaw(**self._import_pickle(path))
         self.vars_raw = [var for var in self._import_vars(self.sample_raw.var_file)]
         self.seq = "".join(
@@ -61,26 +61,53 @@ class SampleImport:
     def write_to_db(self):
         sequence = Sequence.objects.get_or_create(seqhash=self.sample_raw.seqhash)[0]
         sample = self._find_or_create_sample(sequence)
-        gene = Gene.objects.get(id=1)
-        alignment = Alignment.objects.get_or_create(sequence=sequence, gene=gene)[0]
+        replicon = Replicon.objects.get(accession=self.sample_raw.source_acc)
+        alignment = Alignment.objects.get_or_create(
+            sequence=sequence, replicon=replicon
+        )[0]
+        mutations = []
+        query_data = []
         for var_raw in self.vars_raw:
-            if self.mutation_cache.get(var_raw.label):
-                mutation = self.mutation_cache[var_raw.label]
-            else:
-                gene = Gene.objects.get(id=2)
-                mutation_data = {
-                    "gene": gene.id,
-                    "ref": var_raw.ref,
-                    "alt": var_raw.alt,
-                    "start": var_raw.start,
-                    "end": var_raw.end,
-                    "label": var_raw.label,
-                    "frameshift": int(var_raw.frameshift),
-                }
-                mutation = find_or_create(mutation_data, Mutation, MutationSerializer)
-                self.mutation_cache[var_raw.label] = mutation
-            mutation.alignments.add(alignment)
-            mutation.save()
+            gene = None
+            if var_raw.type == "nt":
+                replicon = Replicon.objects.get(
+                    accession=var_raw.replicon_or_cds_accession
+                )
+                gene = Gene.objects.filter(
+                    replicon=replicon, start__gte=var_raw.start, end__lte=var_raw.end
+                ).first()
+            elif var_raw.type == "cds":
+                try:
+                    gene = Gene.objects.get(
+                        cds_accession=var_raw.replicon_or_cds_accession
+                    )
+                    replicon = gene.replicon
+                except Gene.DoesNotExist:
+                    pass
+            mutation_data = {
+                "gene": gene if gene else None,
+                "ref": var_raw.ref,
+                "alt": var_raw.alt,
+                "start": var_raw.start,
+                "end": var_raw.end,
+                "replicon": replicon,
+                "type": var_raw.type,
+            }
+            query_data.append(mutation_data)
+            mutation = Mutation(**mutation_data)
+            mutations.append(mutation)
+        Mutation.objects.bulk_create(mutations, ignore_conflicts=True)
+        # select mutations that were just created
+        refreshed_mutations = Q()
+        for mutation in query_data:
+            refreshed_mutations |= Q(**mutation)
+        saved_mutations = Mutation.objects.filter(refreshed_mutations)
+        Mutation.alignments.through.objects.bulk_create(
+            [
+                Mutation.alignments.through(alignment=alignment, mutation=mutation)
+                for mutation in saved_mutations
+            ]
+        )
         return sample
 
     def _find_or_create_sample(self, sequence):
@@ -119,9 +146,8 @@ class SampleImport:
                     int(var_raw[1]),  # start
                     int(var_raw[2]),  # end
                     None if var_raw[3] == " " else var_raw[3],  # alt
-                    int(var_raw[4]),  # element id
-                    var_raw[5],  # label
-                    bool(var_raw[6]),  # frameshift
+                    var_raw[4],  # replicon_or_cds_accession
+                    var_raw[6],  # type
                 )
 
     def _import_seq(self, path):

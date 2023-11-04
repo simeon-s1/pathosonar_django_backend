@@ -11,16 +11,22 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 
 from pathlib import Path
+import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = os.path.normpath(os.path.dirname(__file__))
+STATIC_ROOT = os.path.join(PROJECT_ROOT, 'static')
+STATIC_URL = '/static/'
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-ixxtp)b-0*btccc*^(4$@lt2g*@rg6xxtea!x@vc0un)$xzren"
-
+SECRET_KEY = os.environ.get(
+    "DJANGO_SECRET_KEY",
+    "django-insecure-ixxtp)b-0*btccc*^(4$@lt2g*@rg6xxtea!x@vc0un)$xzren",
+)
 # SECURITY WARNING: don't run with debug turned on in production!
 # DEBUG = True
 DEBUG = False
@@ -32,6 +38,7 @@ if not DEBUG:
 # Application definition
 
 INSTALLED_APPS = [
+    "corsheaders",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -40,7 +47,6 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "rest_api.apps.RestApiConfig",
     "rest_framework",
-    "corsheaders",
     "django_filters",
     "django_apscheduler",
 ]
@@ -145,6 +151,6 @@ if DEBUG:
         "INTERCEPT_REDIRECTS": False,
     }
 
-DATA_UPLOAD_MAX_MEMORY_SIZE  = None
+DATA_UPLOAD_MAX_MEMORY_SIZE = None
 
-APSCHEDULER_RUN_NOW_TIMEOUT = 60*60*5
+APSCHEDULER_RUN_NOW_TIMEOUT = 60 * 60 * 5

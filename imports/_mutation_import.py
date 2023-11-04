@@ -31,7 +31,6 @@ def read_var_file_and_insert_into_Mutation_table(var_file):
                     vardat[3],  # alt
                     vardat[1],  # start
                     vardat[2],  # end
-                    vardat[5],  # label
                     vardat[6])  # frameshift
                 )
             if line != "//":

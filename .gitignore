@@ -1,3 +1,4 @@
 *.pyc
 */*.pyc
 import_data/
+static/

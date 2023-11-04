@@ -4,7 +4,6 @@ from django.db.models import UniqueConstraint
 
 
 class Sequence(models.Model):
-    id = models.BigAutoField(primary_key=True)
     seqhash = models.CharField(unique=True, max_length=200)
 
     class Meta:
@@ -12,8 +11,7 @@ class Sequence(models.Model):
 
 
 class Alignment(models.Model):
-    id = models.BigAutoField(primary_key=True)
-    gene = models.ForeignKey("Gene", models.DO_NOTHING, blank=True, null=True)
+    replicon = models.ForeignKey("Replicon", models.DO_NOTHING, blank=True, null=True)
     sequence = models.ForeignKey(
         "Sequence", models.DO_NOTHING, blank=True, null=True, related_name="alignments"
     )
@@ -21,7 +19,7 @@ class Alignment(models.Model):
     class Meta:
         indexes = [
             models.Index(
-                fields=["gene", "sequence"],
+                fields=["replicon", "sequence"],
             )
         ]
         db_table = "alignment"
@@ -42,17 +40,15 @@ class Alignment2Mutation(models.Model):
 
 
 class AnnotationType(models.Model):
-    id = models.BigAutoField(primary_key=True)
     seq_ontology = models.CharField(max_length=50, blank=True, null=True)
     region = models.CharField(max_length=50, blank=True, null=True)
-    test = models.CharField(max_length=50, blank=True, null=True)
+    impact = models.CharField(max_length=20, blank=True, null=True)
 
     class Meta:
         db_table = "annotation_type"
 
 
 class Replicon(models.Model):
-    id = models.BigAutoField(primary_key=True)
     length = models.BigIntegerField(blank=True, null=True)
     sequence = models.TextField(blank=True, null=True)
     accession = models.CharField(unique=True, blank=True, null=True)
@@ -66,15 +62,17 @@ class Replicon(models.Model):
 
 
 class Gene(models.Model):
-    id = models.BigAutoField(primary_key=True)
     description = models.CharField(blank=True, null=True)
     start = models.BigIntegerField(blank=True, null=True)
     end = models.BigIntegerField(blank=True, null=True)
     strand = models.BigIntegerField(blank=True, null=True)
     gene_symbol = models.CharField(blank=True, null=True)
+    cds_symbol = models.CharField(blank=True, null=True)
     gene_accession = models.CharField(unique=True, blank=True, null=True)
+    cds_accession = models.CharField(unique=True, blank=True, null=True)
     gene_sequence = models.TextField(blank=True, null=True)
     cds_sequence = models.TextField(blank=True, null=True)
+
     replicon = models.ForeignKey(Replicon, models.DO_NOTHING, blank=True, null=True)
 
     class Meta:
@@ -82,7 +80,6 @@ class Gene(models.Model):
 
 
 class GeneSegment(models.Model):
-    id = models.BigAutoField(primary_key=True)
     gene = models.ForeignKey(Gene, models.DO_NOTHING, blank=True, null=True)
     start = models.BigIntegerField()
     end = models.BigIntegerField()
@@ -95,7 +92,6 @@ class GeneSegment(models.Model):
 
 
 class Lineages(models.Model):
-    id = models.BigAutoField(primary_key=True)
     lineage = models.CharField(max_length=100, unique=True)
     parent_lineage = models.ForeignKey(
         "self",
@@ -109,7 +105,7 @@ class Lineages(models.Model):
 
 
 class Reference(models.Model):
-    id = models.BigAutoField(primary_key=True)
+    name = models.CharField(unique=True, blank=True, null=True)
     accession = models.CharField(unique=True, blank=True, null=True)
     description = models.CharField(blank=True, null=True)
     organism = models.CharField(blank=True, null=True)
@@ -125,7 +121,6 @@ class Reference(models.Model):
 
 
 class Property(models.Model):
-    id = models.BigAutoField(primary_key=True)
     name = models.CharField(unique=True)
     datatype = models.CharField()
     querytype = models.CharField(blank=True, null=True)
@@ -138,7 +133,6 @@ class Property(models.Model):
 
 
 class Sample(models.Model):
-    id = models.BigAutoField(primary_key=True)
     name = models.CharField(unique=True, blank=True, null=True)
     datahash = models.CharField(blank=True, null=True)
     sequence = models.ForeignKey(
@@ -178,15 +172,13 @@ class Sample2Property(models.Model):
 
 
 class Mutation(models.Model):
-    id = models.BigAutoField(primary_key=True)
     gene = models.ForeignKey("Gene", models.DO_NOTHING, blank=True, null=True)
+    replicon = models.ForeignKey(Replicon, models.DO_NOTHING, blank=True, null=True)
     ref = models.CharField(blank=True, null=True)
     alt = models.CharField(blank=True, null=True)
     start = models.BigIntegerField(blank=True, null=True)
     end = models.BigIntegerField(blank=True, null=True)
     parent_id = models.BigIntegerField(blank=True, null=True)
-    label = models.CharField(blank=True, null=True)
-    frameshift = models.BigIntegerField(blank=True, null=True)
     alignments = models.ManyToManyField(
         Alignment, through="Alignment2Mutation", related_name="mutations"
     )
@@ -200,20 +192,19 @@ class Mutation(models.Model):
             models.Index(fields=["end"]),
             models.Index(fields=["ref"]),
             models.Index(fields=["alt"]),
-            models.Index(fields=["label"]),
             models.Index(fields=["type"]),
         ]
-        UniqueConstraint(
-            name="unique_mutation",
-            fields=[
-                "ref",
-                "alt",
-                "start",
-                "end",
-                "frameshift",
-                "type"
-            ],
-        )
+        constraints = [
+            UniqueConstraint(
+                name="unique_mutation",
+                fields=["ref", "alt", "start", "end", "type", "gene", "replicon"],
+            ),
+            UniqueConstraint(
+                name="unique_mutation_null_gene",
+                fields=["ref", "alt", "start", "end", "type", "replicon"],
+                condition=models.Q(gene__isnull=True),
+            ),
+        ]
 
 
 class Mutation2Annotation(models.Model):
@@ -226,27 +217,6 @@ class Mutation2Annotation(models.Model):
     class Meta:
         db_table = "mutation2annotation"
         unique_together = (("mutation", "alignment", "annotation"),)
-
-
-class Mutation2Property(models.Model):
-    property = models.ForeignKey(Property, models.DO_NOTHING)
-    mutation = models.ForeignKey(Mutation, models.DO_NOTHING)
-    value_integer = models.BigIntegerField(blank=True, null=True)
-    value_float = models.DecimalField(
-        max_digits=10, decimal_places=10, blank=True, null=True
-    )
-    value_text = models.TextField(blank=True, null=True)
-    value_varchar = models.CharField(blank=True, null=True)
-    value_blob = models.BinaryField(blank=True, null=True)
-    value_date = models.DateField(blank=True, null=True)
-    value_zip = models.CharField(blank=True, null=True)
-
-    class Meta:
-        db_table = "mutation2property"
-        unique_together = (
-            ("property", "mutation"),
-            ("property", "mutation"),
-        )
 
 
 class EnteredData(models.Model):
